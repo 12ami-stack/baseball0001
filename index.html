@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>可変式野球ゲーム</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #222;
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-index: center;
+            align-items: center;
+        }
+        h1 {
+            margin-bottom: 10px;
+            color: #4caf50;
+        }
+        #game-container {
+            position: relative;
+            background-color: #38761d; /* 野球場っぽい緑 */
+            border: 5px solid #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+        #controls {
+            margin-top: 15px;
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            width: 500px;
+            box-sizing: border-box;
+        }
+        .control-group {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .control-group label {
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .control-group input[type="range"] {
+            width: 60%;
+        }
+        .btn {
+            background-color: #4caf50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            text-align: center;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 5px;
+            transition: background 0.2s;
+        }
+        .btn:hover {
+            background-color: #45a049;
+        }
+        #scoreboard {
+            display: flex;
+            justify-content: space-around;
+            background: #111;
+            padding: 8px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            width: 500px;
+            box-sizing: border-box;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .score-box {
+            text-align: center;
+        }
+        .score-val {
+            color: #ffeb3b;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>可変式野球ゲーム</h1>
+
+    <div id="scoreboard">
+        <div class="score-box">判定: <span id="status-val" class="score-val">-</span></div>
+        <div class="score-box">ヒット: <span id="hits-val" class="score-val">0</span></div>
+        <div class="score-box">アウト: <span id="outs-val" class="score-val">0</span></div>
+    </div>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="500" height="500"></canvas>
+    </div>
+
+    <div id="controls">
+        <div class="control-group">
+            <label for="pitcherX">投手 位置 (左右):</label>
+            <input type="range" id="pitcherX" min="150" max="350" value="250">
+        </div>
+        <div class="control-group">
+            <label for="pitcherY">投手 位置 (前後):</label>
+            <input type="range" id="pitcherY" min="100" max="250" value="180">
+        </div>
+        <div class="control-group">
+            <label for="batterAngle">打者 バット角度 (°):</label>
+            <input type="range" id="batterAngle" min="-45" max="45" value="0">
+        </div>
+        <button id="pitchBtn" class="btn">投球する</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // コントロール要素
+        const pitcherXInput = document.getElementById('pitcherX');
+        const pitcherYInput = document.getElementById('pitcherY');
+        const batterAngleInput = document.getElementById('batterAngle');
+        const pitchBtn = document.getElementById('pitchBtn');
+
+        // スコア要素
+        const statusVal = document.getElementById('status-val');
+        const hitsVal = document.getElementById('hits-val');
+        const outsVal = document.getElementById('outs-val');
+
+        // ゲーム状態変数
+        let score = { hits: 0, outs: 0 };
+        let ball = { x: 250, y: 180, vx: 0, vy: 0, radius: 6, active: false, hit: false };
+        
+        // 固定のホームベース位置
+        const homeBase = { x: 250, y: 440 };
+        const batLength = 40;
+
+        // 音声効果 (Web Audio API)
+        function playTone(freq, duration) {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.type = 'sine';
+                oscillator.frequency.value = freq;
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        // 描画関数
+        function draw() {
+            // 背景クリア
+            ctx.fillStyle = '#38761d';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 内野の土部分を描画
+            ctx.beginPath();
+            ctx.moveTo(250, 260);
+            ctx.lineTo(380, 370);
+            ctx.lineTo(250, 470);
+            ctx.lineTo(120, 370);
+            ctx.closePath();
+            ctx.fillStyle = '#cd7f32';
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // ファウルライン
+            ctx.beginPath();
+            ctx.moveTo(homeBase.x, homeBase.y);
+            ctx.lineTo(0, 150);
+            ctx.moveTo(homeBase.x, homeBase.y);
+            ctx.lineTo(500, 150);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // ホームベース
+            ctx.beginPath();
+            ctx.moveTo(homeBase.x, homeBase.y - 10);
+            ctx.lineTo(homeBase.x + 10, homeBase.y);
+            ctx.lineTo(homeBase.x + 10, homeBase.y + 10);
+            ctx.lineTo(homeBase.x - 10, homeBase.y + 10);
+            ctx.lineTo(homeBase.x - 10, homeBase.y);
+            ctx.closePath();
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+
+            // スコアボードや外野フェンスっぽいライン
+            ctx.beginPath();
+            ctx.arc(250, 500, 450, Math.PI, 2 * Math.PI);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // 1. ピッチャーの位置（可変）
+            const px = parseFloat(pitcherXInput.value);
+            const py = parseFloat(pitcherYInput.value);
+            
+            // ピッチャーズマウンド
+            ctx.beginPath();
+            ctx.arc(px, py, 15, 0, Math.PI * 2);
+            ctx.fillStyle = '#b76e2e';
+            ctx.fill();
+            // ピッチャー本体
+            ctx.beginPath();
+            ctx.arc(px, py, 8, 0, Math.PI * 2);
+            ctx.fillStyle = '#1a237e';
+            ctx.fill();
+
+            // 2. バッターのバット角度（可変）
+            const angleDeg = parseFloat(batterAngleInput.value);
+            const angleRad = (angleDeg * Math.PI) / 180;
+
+            // バットを描画 (ホームベースの少し右か左から構える)
+            const batStartX = homeBase.x - 15;
+            const batStartY = homeBase.y - 5;
+            // 角度を適用した先端位置
+            const batEndX = batStartX + batLength * Math.cos(angleRad - Math.PI/4);
+            const batEndY = batStartY + batLength * Math.sin(angleRad - Math.PI/4);
+
+            ctx.beginPath();
+            ctx.moveTo(batStartX, batStartY);
+            ctx.lineTo(batEndX, batEndY);
+            ctx.strokeStyle = '#ffcc80'; // 木のバット色
+            ctx.lineWidth = 5;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // ボールの描画
+            if (ball.active) {
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff';
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+
+        // ゲームループ用の更新処理
+        function update() {
+            if (!ball.active) return;
+
+            // ボールの移動
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            // 打撃判定 (バットのラインとボールの当たり判定)
+            if (!ball.hit && ball.y >= homeBase.y - 25 && ball.y <= homeBase.y + 10) {
+                const angleDeg = parseFloat(batterAngleInput.value);
+                const angleRad = (angleDeg * Math.PI) / 180;
+                const batStartX = homeBase.x - 15;
+                const batStartY = homeBase.y - 5;
+                const batEndX = batStartX + batLength * Math.cos(angleRad - Math.PI/4);
+                const batEndY = batStartY + batLength * Math.sin(angleRad - Math.PI/4);
+
+                // 簡易的な距離判定（バットの先端付近か中間をボールが通過したか）
+                // ボールとバットの中心点との距離
+                const midBatX = (batStartX + batEndX) / 2;
+                const midBatY = (batStartY + batEndY) / 2;
+                const dist = Math.hypot(ball.x - midBatX, ball.y - midBatY);
+
+                if (dist < 30) {
+                    // ヒット！物理的な反射角度をバットの傾きから計算
+                    ball.hit = true;
+                    playTone(880, 0.15); // カキーン音
+                    
+                    // バットの角度に応じて打球の方向を変える
+                    // 基準は真上(北)への打ち返し。角度によって左右にばらける
+                    const baseLaunchAngle = -Math.PI / 2; // 真上
+                    const launchAngle = baseLaunchAngle + (angleRad * 1.2); 
+                    
+                    const speed = Math.hypot(ball.vx, ball.vy) * 1.1; // やや加速
+                    ball.vx = speed * Math.cos(launchAngle);
+                    ball.vy = speed * Math.sin(launchAngle);
+                }
+            }
+
+            // 画面外、または結果判定
+            if (ball.y < 0 || ball.x < 0 || ball.x > canvas.width || ball.y > canvas.height) {
+                ball.active = false;
+                
+                if (ball.hit) {
+                    // フェンスやファウル判定の簡易シミュレート
+                    // ホームベースからファウルラインの判定
+                    // 簡易的に左右の端に行き過ぎたらファウル、前に飛べばヒット
+                    if (ball.x < 100 || ball.x > 400) {
+                        statusVal.textContent = "ファウル";
+                        statusVal.style.color = "#ff9800";
+                        playTone(330, 0.3);
+                    } else {
+                        statusVal.textContent = "ヒット！";
+                        statusVal.style.color = "#4caf50";
+                        score.hits++;
+                        hitsVal.textContent = score.hits;
+                        playTone(587.33, 0.4);
+                    }
+                } else {
+                    // バットに当たらず後ろに抜けた
+                    statusVal.textContent = "ストライク / アウト";
+                    statusVal.style.color = "#f44336";
+                    score.outs++;
+                    outsVal.textContent = score.outs;
+                    playTone(220, 0.5);
+                }
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 投球ボタンイベント
+        pitchBtn.addEventListener('click', () => {
+            if (ball.active) return; // 既に投球中なら無視
+
+            // 初期位置をピッチャーの可変位置に設定
+            ball.x = parseFloat(pitcherXInput.value);
+            ball.y = parseFloat(pitcherYInput.value);
+            ball.hit = false;
+            ball.active = true;
+            statusVal.textContent = "投球中...";
+            statusVal.style.color = "#fff";
+
+            // ホームベース方向へのベクトル計算
+            const targetX = homeBase.x + (Math.random() * 20 - 10); // 多少のコントロールのブレ
+            const targetY = homeBase.y;
+            
+            const dx = targetX - ball.x;
+            const dy = targetY - ball.y;
+            const steps = 60; // 到達フレーム数（球速）
+
+            ball.vx = dx / steps;
+            ball.vy = dy / steps;
+
+            playTone(440, 0.05); // リリース音
+        });
+
+        // スライダー変更時にリアルタイムで再描画して位置を確認できるようにする
+        pitcherXInput.addEventListener('input', draw);
+        pitcherYInput.addEventListener('input', draw);
+        batterAngleInput.addEventListener('input', draw);
+
+        // 初回描画とループ開始
+        draw();
+        gameLoop();
+    </script>
+</body>
+</html>
